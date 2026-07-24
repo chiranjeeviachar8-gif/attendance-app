@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Attendance by Student{% endblock %}
+{% block content %}
+<div class="card p-4">
+    <h4 class="mb-3">View Attendance by Student</h4>
+
+    <form method="GET" class="row g-2 mb-4">
+        <div class="col-auto">
+            <input type="text" name="roll_no" placeholder="Enter Roll No" value="{{ roll_no }}" class="form-control">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-outline-primary">Search</button>
+        </div>
+    </form>
+
+    {% if student_name %}
+    <h5>{{ student_name }} (Roll {{ roll_no }})</h5>
+    {% if rows %}
+    <p class="text-muted">Total days recorded: {{ rows|length }} &nbsp; Attendance %: {{ present_pct }}%</p>
+    <table class="table table-striped">
+        <thead><tr><th>Date</th><th>Status</th></tr></thead>
+        <tbody>
+            {% for r in rows %}
+            <tr>
+                <td>{{ r['date'] }}</td>
+                <td>
+                    {% if r['status'] == 'Present' %}
+                        <span class="badge bg-success">Present</span>
+                    {% else %}
+                        <span class="badge bg-danger">Absent</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No attendance records yet for this student.</p>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

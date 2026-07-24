@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h2 class="mb-4">Welcome, {{ teacher }} 👋</h2>
+
+<div class="row g-3">
+    <div class="col-md-4">
+        <div class="card p-4 text-center">
+            <h6 class="text-muted">Total Students</h6>
+            <h2>{{ student_count }}</h2>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-4 text-center">
+            <h6 class="text-muted">Marked Today ({{ today }})</h6>
+            <h2>{{ today_marked }} / {{ student_count }}</h2>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card p-4 text-center">
+            <h6 class="text-muted">Quick Actions</h6>
+            <a href="{{ url_for('mark_attendance') }}" class="btn btn-primary btn-sm mt-2">Mark Attendance</a>
+            <a href="{{ url_for('students') }}" class="btn btn-outline-secondary btn-sm mt-2">Manage Students</a>
+        </div>
+    </div>
+</div>
+{% endblock %}

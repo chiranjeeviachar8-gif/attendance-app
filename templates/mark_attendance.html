@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Mark Attendance{% endblock %}
+{% block content %}
+<div class="card p-4">
+    <h4 class="mb-3">Mark Attendance</h4>
+
+    <form method="GET" class="row g-2 mb-4">
+        <div class="col-auto">
+            <input type="date" name="att_date" value="{{ selected_date }}" class="form-control">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-outline-primary">Load Date</button>
+        </div>
+    </form>
+
+    {% if students %}
+    <form method="POST">
+        <input type="hidden" name="att_date" value="{{ selected_date }}">
+        <table class="table align-middle">
+            <thead>
+                <tr><th>Roll No</th><th>Name</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+                {% for s in students %}
+                <tr>
+                    <td>{{ s['roll_no'] }}</td>
+                    <td>{{ s['name'] }}</td>
+                    <td>
+                        <div class="btn-group" role="group">
+                            <input type="radio" class="btn-check" name="status_{{ s['id'] }}" id="p{{ s['id'] }}" value="Present"
+                                {% if existing_map.get(s['id']) == 'Present' %}checked{% endif %}>
+                            <label class="btn btn-outline-success btn-sm" for="p{{ s['id'] }}">Present</label>
+
+                            <input type="radio" class="btn-check" name="status_{{ s['id'] }}" id="a{{ s['id'] }}" value="Absent"
+                                {% if existing_map.get(s['id']) == 'Absent' %}checked{% endif %}>
+                            <label class="btn btn-outline-danger btn-sm" for="a{{ s['id'] }}">Absent</label>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button type="submit" class="btn btn-primary">Save Attendance for {{ selected_date }}</button>
+    </form>
+    {% else %}
+    <p class="text-muted">No students found. Add students first.</p>
+    {% endif %}
+</div>
+{% endblock %}

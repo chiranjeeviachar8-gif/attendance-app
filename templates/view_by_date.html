@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Attendance by Date{% endblock %}
+{% block content %}
+<div class="card p-4">
+    <h4 class="mb-3">View Attendance by Date</h4>
+
+    <form method="GET" class="row g-2 mb-4">
+        <div class="col-auto">
+            <input type="date" name="att_date" value="{{ selected_date }}" class="form-control">
+        </div>
+        <div class="col-auto">
+            <button type="submit" class="btn btn-outline-primary">Load</button>
+        </div>
+    </form>
+
+    {% if rows %}
+    <p class="text-muted">Total: {{ total }} &nbsp; Present: {{ present_count }} &nbsp; Absent: {{ total - present_count }}</p>
+    <table class="table table-striped">
+        <thead><tr><th>Roll No</th><th>Name</th><th>Status</th></tr></thead>
+        <tbody>
+            {% for r in rows %}
+            <tr>
+                <td>{{ r['roll_no'] }}</td>
+                <td>{{ r['name'] }}</td>
+                <td>
+                    {% if r['status'] == 'Present' %}
+                        <span class="badge bg-success">Present</span>
+                    {% else %}
+                        <span class="badge bg-danger">Absent</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No attendance records for {{ selected_date }}.</p>
+    {% endif %}
+</div>
+{% endblock %}
