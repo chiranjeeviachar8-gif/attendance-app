@@ -21,9 +21,11 @@ Then open in your browser: http://127.0.0.1:5000
 
 import os
 import sys
+import csv
+import io
 from datetime import date, timedelta
 
-from flask import Flask, render_template, request, redirect, url_for, session, flash
+from flask import Flask, render_template, request, redirect, url_for, session, flash, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -321,6 +323,35 @@ def view_by_student():
         roll_no=roll_no,
         student_name=student_name,
         present_pct=present_pct,
+    )
+
+
+# ---------------------------------------------------------------------
+# CSV Export
+# ---------------------------------------------------------------------
+@app.route("/export/csv")
+@login_required
+def export_csv():
+    """Download all attendance records as a CSV file (opens in Excel/Sheets)."""
+    rows = query("""
+        SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
+        FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        ORDER BY a.date, CAST(s.roll_no AS INTEGER), s.roll_no
+    """)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Roll No", "Name", "Class", "Date", "Status", "Marked By"])
+    for r in rows:
+        writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
+                          r["date"], r["status"], r["marked_by"] or ""])
+
+    filename = f"attendance_export_{date.today()}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 
