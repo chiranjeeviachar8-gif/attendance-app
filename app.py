@@ -83,16 +83,31 @@ def init_db():
                     UNIQUE(student_id, date)
                 )
             """))
-            # --- Migration: add 'owner' column if this DB was created before this upgrade ---
-            try:
-                conn.execute(text("ALTER TABLE students ADD COLUMN owner TEXT"))
-                print("[DB] Migrated: added 'owner' column to students table.", flush=True)
-            except Exception:
-                pass  # column already exists
         print(f"[DB] SUCCESS: connected and tables ready ({'Postgres/Neon' if IS_POSTGRES else 'local SQLite'}).", flush=True)
     except OperationalError as e:
         print(f"[DB] FAILED TO CONNECT: {e}", flush=True)
         raise
+
+    # --- Migration: add 'owner' column if this DB was created before this upgrade ---
+    # Runs in its OWN transaction so it can never break the main table setup above.
+    try:
+        with engine.begin() as conn:
+            if IS_POSTGRES:
+                exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'students' AND column_name = 'owner'
+                """)).first()
+            else:
+                cols = conn.execute(text("PRAGMA table_info(students)")).fetchall()
+                exists = any(c[1] == "owner" for c in cols)
+
+            if not exists:
+                conn.execute(text("ALTER TABLE students ADD COLUMN owner TEXT"))
+                print("[DB] Migrated: added 'owner' column to students table.", flush=True)
+            else:
+                print("[DB] 'owner' column already present -- no migration needed.", flush=True)
+    except Exception as e:
+        print(f"[DB] Migration check failed (non-fatal): {e}", flush=True)
 
 
 def query(sql, params=None, fetch="all"):
