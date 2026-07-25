@@ -233,6 +233,33 @@ def delete_student(student_id):
     return redirect(url_for("students"))
 
 
+@app.route("/students/edit/<int:student_id>", methods=["GET", "POST"])
+@login_required
+def edit_student(student_id):
+    student = query("SELECT * FROM students WHERE id = :id", {"id": student_id}, fetch="one")
+    if not student:
+        flash("Student not found.", "danger")
+        return redirect(url_for("students"))
+
+    if request.method == "POST":
+        roll_no = request.form["roll_no"].strip()
+        name = request.form["name"].strip()
+        class_name = request.form["class_name"].strip()
+        try:
+            query(
+                "UPDATE students SET roll_no = :r, name = :n, class_name = :c WHERE id = :id",
+                {"r": roll_no, "n": name, "c": class_name, "id": student_id},
+                fetch=None,
+            )
+            flash(f"Student '{name}' updated.", "success")
+            return redirect(url_for("students"))
+        except IntegrityError:
+            flash("Another student already has that roll number.", "danger")
+            student = query("SELECT * FROM students WHERE id = :id", {"id": student_id}, fetch="one")
+
+    return render_template("edit_student.html", student=student)
+
+
 # ---------------------------------------------------------------------
 # Attendance
 # ---------------------------------------------------------------------
@@ -348,6 +375,35 @@ def export_csv():
                           r["date"], r["status"], r["marked_by"] or ""])
 
     filename = f"attendance_export_{date.today()}.csv"
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/export/csv/date")
+@login_required
+def export_csv_by_date():
+    """Download attendance for one specific date as a CSV file."""
+    selected_date = request.args.get("att_date") or str(date.today())
+
+    rows = query("""
+        SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
+        FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE a.date = :d
+        ORDER BY CAST(s.roll_no AS INTEGER), s.roll_no
+    """, {"d": selected_date})
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Roll No", "Name", "Class", "Date", "Status", "Marked By"])
+    for r in rows:
+        writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
+                          r["date"], r["status"], r["marked_by"] or ""])
+
+    filename = f"attendance_{selected_date}.csv"
     return Response(
         output.getvalue(),
         mimetype="text/csv",

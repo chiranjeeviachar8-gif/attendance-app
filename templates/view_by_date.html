@@ -15,6 +15,7 @@
 
     {% if rows %}
     <p class="text-muted">Total: {{ total }} &nbsp; Present: {{ present_count }} &nbsp; Absent: {{ total - present_count }}</p>
+    <a href="{{ url_for('export_csv_by_date', att_date=selected_date) }}" class="btn btn-outline-success btn-sm mb-3">⬇ Export This Date (CSV)</a>
     <table class="table table-striped">
         <thead><tr><th>Roll No</th><th>Name</th><th>Status</th></tr></thead>
         <tbody>
