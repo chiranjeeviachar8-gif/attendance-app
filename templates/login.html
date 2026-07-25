@@ -12,7 +12,10 @@
                 </div>
                 <div class="mb-3">
                     <label class="form-label">Password</label>
-                    <input type="password" name="password" class="form-control" required>
+                    <div class="input-group">
+                        <input type="password" name="password" id="passwordField" class="form-control" required>
+                        <button type="button" class="btn btn-outline-secondary" id="togglePassword">Show</button>
+                    </div>
                 </div>
                 <div class="mb-3 form-check">
                     <input type="checkbox" name="remember" class="form-check-input" id="remember" checked>
@@ -26,4 +29,12 @@
         </div>
     </div>
 </div>
+<script>
+    document.getElementById('togglePassword').addEventListener('click', function () {
+        const field = document.getElementById('passwordField');
+        const isHidden = field.type === 'password';
+        field.type = isHidden ? 'text' : 'password';
+        this.textContent = isHidden ? 'Hide' : 'Show';
+    });
+</script>
 {% endblock %}

@@ -16,6 +16,7 @@
     {% if students %}
     <form method="POST">
         <input type="hidden" name="att_date" value="{{ selected_date }}">
+        <div class="table-responsive">
         <table class="table align-middle">
             <thead>
                 <tr><th>Roll No</th><th>Name</th><th>Status</th></tr>
@@ -40,6 +41,7 @@
                 {% endfor %}
             </tbody>
         </table>
+        </div>
         <button type="submit" class="btn btn-primary">Save Attendance for {{ selected_date }}</button>
     </form>
     {% else %}

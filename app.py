@@ -1,8 +1,8 @@
 """
 Student Attendance Web Application
 -----------------------------------
-A Flask web app where teachers can register/login and mark
-students Present/Absent, then view attendance reports.
+A Flask web app where teachers register/login and each teacher manages
+their OWN private list of students, attendance, and CSV exports.
 
 DATABASE:
 - If a DATABASE_URL environment variable is set (e.g. a free Neon/Render
@@ -38,19 +38,15 @@ app.permanent_session_lifetime = timedelta(days=30)  # "Remember Me" duration
 # Database setup (works with SQLite locally, PostgreSQL when deployed)
 # ---------------------------------------------------------------------
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///attendance.db")
-# Render/Neon sometimes give "postgres://" -- SQLAlchemy needs "postgresql://"
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# --- Loud, unmissable startup log: check this in Render's "Logs" tab ---
 if "DATABASE_URL" in os.environ:
-    safe_url = DATABASE_URL.split("@")[-1]  # hide username/password, show only host/db
+    safe_url = DATABASE_URL.split("@")[-1]
     print(f"[DB] DATABASE_URL is SET. Connecting to Postgres host: {safe_url}", flush=True)
 else:
     print("[DB] WARNING: DATABASE_URL is NOT set in the environment.", flush=True)
     print("[DB] Falling back to local SQLite file (attendance.db).", flush=True)
-    print("[DB] This means data will be LOST on Render restarts/redeploys!", flush=True)
-    print("[DB] Fix: add DATABASE_URL in Render -> Environment tab with your Neon connection string.", flush=True)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 IS_POSTGRES = engine.dialect.name == "postgresql"
@@ -70,9 +66,11 @@ def init_db():
             conn.execute(text(f"""
                 CREATE TABLE IF NOT EXISTS students (
                     id {id_type},
-                    roll_no TEXT UNIQUE NOT NULL,
+                    owner TEXT NOT NULL,
+                    roll_no TEXT NOT NULL,
                     name TEXT NOT NULL,
-                    class_name TEXT
+                    class_name TEXT,
+                    UNIQUE(owner, roll_no)
                 )
             """))
             conn.execute(text(f"""
@@ -85,11 +83,15 @@ def init_db():
                     UNIQUE(student_id, date)
                 )
             """))
+            # --- Migration: add 'owner' column if this DB was created before this upgrade ---
+            try:
+                conn.execute(text("ALTER TABLE students ADD COLUMN owner TEXT"))
+                print("[DB] Migrated: added 'owner' column to students table.", flush=True)
+            except Exception:
+                pass  # column already exists
         print(f"[DB] SUCCESS: connected and tables ready ({'Postgres/Neon' if IS_POSTGRES else 'local SQLite'}).", flush=True)
     except OperationalError as e:
         print(f"[DB] FAILED TO CONNECT: {e}", flush=True)
-        print("[DB] Check that DATABASE_URL in Render's Environment tab exactly matches "
-              "the connection string copied from Neon (including password and ?sslmode=require).", flush=True)
         raise
 
 
@@ -114,6 +116,11 @@ def login_required(func):
             return redirect(url_for("login"))
         return func(*args, **kwargs)
     return wrapper
+
+
+def current_owner():
+    """The logged-in teacher's username -- used to scope all their data."""
+    return session["teacher"]
 
 
 # ---------------------------------------------------------------------
@@ -157,7 +164,7 @@ def login():
         )
 
         if teacher and check_password_hash(teacher["password_hash"], password):
-            session.permanent = remember  # stay logged in for 30 days if checked
+            session.permanent = remember
             session["teacher"] = username
             flash(f"Welcome back, {username}!", "success")
             return redirect(url_for("dashboard"))
@@ -180,14 +187,19 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    student_count = query("SELECT COUNT(*) AS c FROM students", fetch="one")["c"]
-    today = str(date.today())
-    today_marked = query(
-        "SELECT COUNT(*) AS c FROM attendance WHERE date = :d", {"d": today}, fetch="one"
+    owner = current_owner()
+    student_count = query(
+        "SELECT COUNT(*) AS c FROM students WHERE owner = :o", {"o": owner}, fetch="one"
     )["c"]
+    today = str(date.today())
+    today_marked = query("""
+        SELECT COUNT(*) AS c FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE a.date = :d AND s.owner = :o
+    """, {"d": today, "o": owner}, fetch="one")["c"]
     return render_template(
         "dashboard.html",
-        teacher=session["teacher"],
+        teacher=owner,
         student_count=student_count,
         today=today,
         today_marked=today_marked,
@@ -195,27 +207,29 @@ def dashboard():
 
 
 # ---------------------------------------------------------------------
-# Student management
+# Student management (each teacher only sees/edits their OWN students)
 # ---------------------------------------------------------------------
 @app.route("/students", methods=["GET", "POST"])
 @login_required
 def students():
+    owner = current_owner()
     if request.method == "POST":
         roll_no = request.form["roll_no"].strip()
         name = request.form["name"].strip()
         class_name = request.form["class_name"].strip()
         try:
             query(
-                "INSERT INTO students (roll_no, name, class_name) VALUES (:r, :n, :c)",
-                {"r": roll_no, "n": name, "c": class_name},
+                "INSERT INTO students (owner, roll_no, name, class_name) VALUES (:o, :r, :n, :c)",
+                {"o": owner, "r": roll_no, "n": name, "c": class_name},
                 fetch=None,
             )
             flash(f"Student '{name}' added.", "success")
         except IntegrityError:
-            flash("A student with that roll number already exists.", "danger")
+            flash("You already have a student with that roll number.", "danger")
 
     all_students = query(
-        "SELECT * FROM students ORDER BY CAST(roll_no AS INTEGER), roll_no"
+        "SELECT * FROM students WHERE owner = :o ORDER BY CAST(roll_no AS INTEGER), roll_no",
+        {"o": owner},
     )
     return render_template("students.html", students=all_students)
 
@@ -223,7 +237,10 @@ def students():
 @app.route("/students/delete/<int:student_id>", methods=["POST"])
 @login_required
 def delete_student(student_id):
-    student = query("SELECT * FROM students WHERE id = :id", {"id": student_id}, fetch="one")
+    owner = current_owner()
+    student = query(
+        "SELECT * FROM students WHERE id = :id AND owner = :o", {"id": student_id, "o": owner}, fetch="one"
+    )
     if student:
         query("DELETE FROM attendance WHERE student_id = :id", {"id": student_id}, fetch=None)
         query("DELETE FROM students WHERE id = :id", {"id": student_id}, fetch=None)
@@ -236,7 +253,10 @@ def delete_student(student_id):
 @app.route("/students/edit/<int:student_id>", methods=["GET", "POST"])
 @login_required
 def edit_student(student_id):
-    student = query("SELECT * FROM students WHERE id = :id", {"id": student_id}, fetch="one")
+    owner = current_owner()
+    student = query(
+        "SELECT * FROM students WHERE id = :id AND owner = :o", {"id": student_id, "o": owner}, fetch="one"
+    )
     if not student:
         flash("Student not found.", "danger")
         return redirect(url_for("students"))
@@ -247,27 +267,31 @@ def edit_student(student_id):
         class_name = request.form["class_name"].strip()
         try:
             query(
-                "UPDATE students SET roll_no = :r, name = :n, class_name = :c WHERE id = :id",
-                {"r": roll_no, "n": name, "c": class_name, "id": student_id},
+                "UPDATE students SET roll_no = :r, name = :n, class_name = :c WHERE id = :id AND owner = :o",
+                {"r": roll_no, "n": name, "c": class_name, "id": student_id, "o": owner},
                 fetch=None,
             )
             flash(f"Student '{name}' updated.", "success")
             return redirect(url_for("students"))
         except IntegrityError:
-            flash("Another student already has that roll number.", "danger")
-            student = query("SELECT * FROM students WHERE id = :id", {"id": student_id}, fetch="one")
+            flash("You already have another student with that roll number.", "danger")
+            student = query(
+                "SELECT * FROM students WHERE id = :id AND owner = :o", {"id": student_id, "o": owner}, fetch="one"
+            )
 
     return render_template("edit_student.html", student=student)
 
 
 # ---------------------------------------------------------------------
-# Attendance
+# Attendance (scoped to the logged-in teacher's own students)
 # ---------------------------------------------------------------------
 @app.route("/attendance/mark", methods=["GET", "POST"])
 @login_required
 def mark_attendance():
+    owner = current_owner()
     all_students = query(
-        "SELECT * FROM students ORDER BY CAST(roll_no AS INTEGER), roll_no"
+        "SELECT * FROM students WHERE owner = :o ORDER BY CAST(roll_no AS INTEGER), roll_no",
+        {"o": owner},
     )
     selected_date = request.values.get("att_date") or str(date.today())
 
@@ -280,13 +304,14 @@ def mark_attendance():
                     VALUES (:sid, :d, :s, :m)
                     ON CONFLICT (student_id, date)
                     DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
-                """, {"sid": student["id"], "d": selected_date, "s": status,
-                      "m": session["teacher"]}, fetch=None)
+                """, {"sid": student["id"], "d": selected_date, "s": status, "m": owner}, fetch=None)
         flash(f"Attendance for {selected_date} saved.", "success")
 
-    existing = query(
-        "SELECT student_id, status FROM attendance WHERE date = :d", {"d": selected_date}
-    )
+    existing = query("""
+        SELECT a.student_id, a.status FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE a.date = :d AND s.owner = :o
+    """, {"d": selected_date, "o": owner})
     existing_map = {row["student_id"]: row["status"] for row in existing}
 
     return render_template(
@@ -300,15 +325,16 @@ def mark_attendance():
 @app.route("/attendance/by-date", methods=["GET", "POST"])
 @login_required
 def view_by_date():
+    owner = current_owner()
     selected_date = request.values.get("att_date") or str(date.today())
 
     rows = query("""
         SELECT s.roll_no, s.name, a.status
         FROM attendance a
         JOIN students s ON s.id = a.student_id
-        WHERE a.date = :d
+        WHERE a.date = :d AND s.owner = :o
         ORDER BY CAST(s.roll_no AS INTEGER), s.roll_no
-    """, {"d": selected_date})
+    """, {"d": selected_date, "o": owner})
 
     present_count = sum(1 for r in rows if r["status"] == "Present")
     return render_template(
@@ -323,6 +349,7 @@ def view_by_date():
 @app.route("/attendance/by-student", methods=["GET", "POST"])
 @login_required
 def view_by_student():
+    owner = current_owner()
     roll_no = request.values.get("roll_no", "").strip()
     rows = []
     student_name = None
@@ -330,7 +357,7 @@ def view_by_student():
 
     if roll_no:
         student = query(
-            "SELECT * FROM students WHERE roll_no = :r", {"r": roll_no}, fetch="one"
+            "SELECT * FROM students WHERE roll_no = :r AND owner = :o", {"r": roll_no, "o": owner}, fetch="one"
         )
         if student:
             student_name = student["name"]
@@ -342,7 +369,7 @@ def view_by_student():
                 present = sum(1 for r in rows if r["status"] == "Present")
                 present_pct = round(present / len(rows) * 100, 1)
         else:
-            flash("No student found with that roll number.", "danger")
+            flash("No student found with that roll number in your class.", "danger")
 
     return render_template(
         "view_by_student.html",
@@ -354,18 +381,19 @@ def view_by_student():
 
 
 # ---------------------------------------------------------------------
-# CSV Export
+# CSV Export (only the logged-in teacher's own data, named with their username)
 # ---------------------------------------------------------------------
 @app.route("/export/csv")
 @login_required
 def export_csv():
-    """Download all attendance records as a CSV file (opens in Excel/Sheets)."""
+    owner = current_owner()
     rows = query("""
         SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
         FROM attendance a
         JOIN students s ON s.id = a.student_id
+        WHERE s.owner = :o
         ORDER BY a.date, CAST(s.roll_no AS INTEGER), s.roll_no
-    """)
+    """, {"o": owner})
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -374,7 +402,7 @@ def export_csv():
         writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
                           r["date"], r["status"], r["marked_by"] or ""])
 
-    filename = f"attendance_export_{date.today()}.csv"
+    filename = f"attendance_{owner}_{date.today()}.csv"
     return Response(
         output.getvalue(),
         mimetype="text/csv",
@@ -385,16 +413,16 @@ def export_csv():
 @app.route("/export/csv/date")
 @login_required
 def export_csv_by_date():
-    """Download attendance for one specific date as a CSV file."""
+    owner = current_owner()
     selected_date = request.args.get("att_date") or str(date.today())
 
     rows = query("""
         SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
         FROM attendance a
         JOIN students s ON s.id = a.student_id
-        WHERE a.date = :d
+        WHERE a.date = :d AND s.owner = :o
         ORDER BY CAST(s.roll_no AS INTEGER), s.roll_no
-    """, {"d": selected_date})
+    """, {"d": selected_date, "o": owner})
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -403,7 +431,7 @@ def export_csv_by_date():
         writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
                           r["date"], r["status"], r["marked_by"] or ""])
 
-    filename = f"attendance_{selected_date}.csv"
+    filename = f"attendance_{owner}_{selected_date}.csv"
     return Response(
         output.getvalue(),
         mimetype="text/csv",
@@ -414,7 +442,7 @@ def export_csv_by_date():
 # ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
-init_db()  # ensure tables exist whenever the app module is loaded (e.g. by gunicorn)
+init_db()
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0")
