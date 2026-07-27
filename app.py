@@ -32,28 +32,37 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key")
-app.permanent_session_lifetime = timedelta(days=30)  # "Remember Me" duration
+app.permanent_session_lifetime = timedelta(days=3650)  # "Remember Me" ~= stays logged in for 10 years (effectively forever)
 
 # ---------------------------------------------------------------------
-# Database setup (works with SQLite locally, PostgreSQL when deployed)
+# Database setup (works with SQLite locally, PostgreSQL or MySQL when deployed)
 # ---------------------------------------------------------------------
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///attendance.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+# Plain "mysql://" needs a driver name for SQLAlchemy -- default to pymysql
+if DATABASE_URL.startswith("mysql://"):
+    DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
 
 if "DATABASE_URL" in os.environ:
     safe_url = DATABASE_URL.split("@")[-1]
-    print(f"[DB] DATABASE_URL is SET. Connecting to Postgres host: {safe_url}", flush=True)
+    print(f"[DB] DATABASE_URL is SET. Connecting to host: {safe_url}", flush=True)
 else:
     print("[DB] WARNING: DATABASE_URL is NOT set in the environment.", flush=True)
     print("[DB] Falling back to local SQLite file (attendance.db).", flush=True)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 IS_POSTGRES = engine.dialect.name == "postgresql"
+IS_MYSQL = engine.dialect.name in ("mysql", "mariadb")
 
 
 def init_db():
-    id_type = "SERIAL PRIMARY KEY" if IS_POSTGRES else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    if IS_POSTGRES:
+        id_type = "SERIAL PRIMARY KEY"
+    elif IS_MYSQL:
+        id_type = "INTEGER PRIMARY KEY AUTO_INCREMENT"
+    else:
+        id_type = "INTEGER PRIMARY KEY AUTOINCREMENT"
     try:
         with engine.begin() as conn:
             conn.execute(text(f"""
@@ -83,7 +92,8 @@ def init_db():
                     UNIQUE(student_id, date)
                 )
             """))
-        print(f"[DB] SUCCESS: connected and tables ready ({'Postgres/Neon' if IS_POSTGRES else 'local SQLite'}).", flush=True)
+        db_label = "Postgres/Neon" if IS_POSTGRES else ("MySQL" if IS_MYSQL else "local SQLite")
+        print(f"[DB] SUCCESS: connected and tables ready ({db_label}).", flush=True)
     except OperationalError as e:
         print(f"[DB] FAILED TO CONNECT: {e}", flush=True)
         raise
@@ -96,6 +106,11 @@ def init_db():
                 exists = conn.execute(text("""
                     SELECT 1 FROM information_schema.columns
                     WHERE table_name = 'students' AND column_name = 'owner'
+                """)).first()
+            elif IS_MYSQL:
+                exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'students' AND column_name = 'owner' AND table_schema = DATABASE()
                 """)).first()
             else:
                 cols = conn.execute(text("PRAGMA table_info(students)")).fetchall()
@@ -314,12 +329,20 @@ def mark_attendance():
         for student in all_students:
             status = request.form.get(f"status_{student['id']}")
             if status in ("Present", "Absent"):
-                query("""
-                    INSERT INTO attendance (student_id, date, status, marked_by)
-                    VALUES (:sid, :d, :s, :m)
-                    ON CONFLICT (student_id, date)
-                    DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
-                """, {"sid": student["id"], "d": selected_date, "s": status, "m": owner}, fetch=None)
+                if IS_MYSQL:
+                    upsert_sql = """
+                        INSERT INTO attendance (student_id, date, status, marked_by)
+                        VALUES (:sid, :d, :s, :m)
+                        ON DUPLICATE KEY UPDATE status = VALUES(status), marked_by = VALUES(marked_by)
+                    """
+                else:
+                    upsert_sql = """
+                        INSERT INTO attendance (student_id, date, status, marked_by)
+                        VALUES (:sid, :d, :s, :m)
+                        ON CONFLICT (student_id, date)
+                        DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
+                    """
+                query(upsert_sql, {"sid": student["id"], "d": selected_date, "s": status, "m": owner}, fetch=None)
         flash(f"Attendance for {selected_date} saved.", "success")
 
     existing = query("""
