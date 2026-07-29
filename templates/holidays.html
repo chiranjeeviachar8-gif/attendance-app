@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Holidays{% endblock %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-md-5">
+        <div class="card p-4">
+            <h4 class="mb-3">Add Holiday</h4>
+            <form method="POST">
+                <div class="mb-3">
+                    <label class="form-label">Date</label>
+                    <input type="date" name="holiday_date" class="form-control" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Description (optional)</label>
+                    <input type="text" name="description" class="form-control" placeholder="e.g. Independence Day">
+                </div>
+                <button type="submit" class="btn btn-success w-100">Add Holiday</button>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="card p-4">
+            <h4 class="mb-3">Holiday List</h4>
+            {% if holidays %}
+            <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr><th>Date</th><th>Description</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for h in holidays %}
+                    <tr>
+                        <td>{{ h['holiday_date'] }}</td>
+                        <td>{{ h['description'] or '-' }}</td>
+                        <td>
+                            <form method="POST" action="{{ url_for('delete_holiday', holiday_id=h['id']) }}"
+                                  onsubmit="return confirm('Remove this holiday?');">
+                                <button type="submit" class="btn btn-outline-danger btn-sm">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <p class="text-muted">No holidays added yet. On days you add here, attendance marking will be blocked automatically.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

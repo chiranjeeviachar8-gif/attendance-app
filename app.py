@@ -92,6 +92,15 @@ def init_db():
                     UNIQUE(student_id, date)
                 )
             """))
+            conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS holidays (
+                    id {id_type},
+                    owner TEXT NOT NULL,
+                    holiday_date TEXT NOT NULL,
+                    description TEXT,
+                    UNIQUE(owner, holiday_date)
+                )
+            """))
         db_label = "Postgres/Neon" if IS_POSTGRES else ("MySQL" if IS_MYSQL else "local SQLite")
         print(f"[DB] SUCCESS: connected and tables ready ({db_label}).", flush=True)
     except OperationalError as e:
@@ -325,25 +334,33 @@ def mark_attendance():
     )
     selected_date = request.values.get("att_date") or str(date.today())
 
+    holiday = query(
+        "SELECT * FROM holidays WHERE owner = :o AND holiday_date = :d",
+        {"o": owner, "d": selected_date}, fetch="one"
+    )
+
     if request.method == "POST":
-        for student in all_students:
-            status = request.form.get(f"status_{student['id']}")
-            if status in ("Present", "Absent"):
-                if IS_MYSQL:
-                    upsert_sql = """
-                        INSERT INTO attendance (student_id, date, status, marked_by)
-                        VALUES (:sid, :d, :s, :m)
-                        ON DUPLICATE KEY UPDATE status = VALUES(status), marked_by = VALUES(marked_by)
-                    """
-                else:
-                    upsert_sql = """
-                        INSERT INTO attendance (student_id, date, status, marked_by)
-                        VALUES (:sid, :d, :s, :m)
-                        ON CONFLICT (student_id, date)
-                        DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
-                    """
-                query(upsert_sql, {"sid": student["id"], "d": selected_date, "s": status, "m": owner}, fetch=None)
-        flash(f"Attendance for {selected_date} saved.", "success")
+        if holiday:
+            flash(f"{selected_date} is marked as a holiday ({holiday['description'] or 'Holiday'}) — attendance was not saved.", "warning")
+        else:
+            for student in all_students:
+                status = request.form.get(f"status_{student['id']}")
+                if status in ("Present", "Absent"):
+                    if IS_MYSQL:
+                        upsert_sql = """
+                            INSERT INTO attendance (student_id, date, status, marked_by)
+                            VALUES (:sid, :d, :s, :m)
+                            ON DUPLICATE KEY UPDATE status = VALUES(status), marked_by = VALUES(marked_by)
+                        """
+                    else:
+                        upsert_sql = """
+                            INSERT INTO attendance (student_id, date, status, marked_by)
+                            VALUES (:sid, :d, :s, :m)
+                            ON CONFLICT (student_id, date)
+                            DO UPDATE SET status = excluded.status, marked_by = excluded.marked_by
+                        """
+                    query(upsert_sql, {"sid": student["id"], "d": selected_date, "s": status, "m": owner}, fetch=None)
+            flash(f"Attendance for {selected_date} saved.", "success")
 
     existing = query("""
         SELECT a.student_id, a.status FROM attendance a
@@ -357,6 +374,7 @@ def mark_attendance():
         students=all_students,
         selected_date=selected_date,
         existing_map=existing_map,
+        holiday=holiday,
     )
 
 
@@ -475,6 +493,45 @@ def export_csv_by_date():
         mimetype="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ---------------------------------------------------------------------
+# Holidays
+# ---------------------------------------------------------------------
+@app.route("/holidays", methods=["GET", "POST"])
+@login_required
+def holidays():
+    owner = current_owner()
+    if request.method == "POST":
+        holiday_date = request.form["holiday_date"].strip()
+        description = request.form.get("description", "").strip()
+        try:
+            query(
+                "INSERT INTO holidays (owner, holiday_date, description) VALUES (:o, :d, :desc)",
+                {"o": owner, "d": holiday_date, "desc": description},
+                fetch=None,
+            )
+            flash(f"Holiday added for {holiday_date}.", "success")
+        except IntegrityError:
+            flash(f"{holiday_date} is already marked as a holiday.", "danger")
+
+    all_holidays = query(
+        "SELECT * FROM holidays WHERE owner = :o ORDER BY holiday_date",
+        {"o": owner},
+    )
+    return render_template("holidays.html", holidays=all_holidays)
+
+
+@app.route("/holidays/delete/<int:holiday_id>", methods=["POST"])
+@login_required
+def delete_holiday(holiday_id):
+    owner = current_owner()
+    query(
+        "DELETE FROM holidays WHERE id = :id AND owner = :o",
+        {"id": holiday_id, "o": owner}, fetch=None,
+    )
+    flash("Holiday removed.", "info")
+    return redirect(url_for("holidays"))
 
 
 # ---------------------------------------------------------------------

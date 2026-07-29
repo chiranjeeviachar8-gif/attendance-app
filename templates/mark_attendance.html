@@ -13,9 +13,17 @@
         </div>
     </form>
 
+    {% if holiday %}
+    <div class="alert alert-warning">
+        📅 <strong>{{ selected_date }} is marked as a holiday</strong>{% if holiday['description'] %} — {{ holiday['description'] }}{% endif %}.
+        Attendance cannot be marked for this date. <a href="{{ url_for('holidays') }}">Manage holidays</a>
+    </div>
+    {% endif %}
+
     {% if students %}
     <form method="POST">
         <input type="hidden" name="att_date" value="{{ selected_date }}">
+        <fieldset {% if holiday %}disabled{% endif %}>
         <div class="table-responsive">
         <table class="table align-middle">
             <thead>
@@ -43,6 +51,7 @@
         </table>
         </div>
         <button type="submit" class="btn btn-primary">Save Attendance for {{ selected_date }}</button>
+        </fieldset>
     </form>
     {% else %}
     <p class="text-muted">No students found. Add students first.</p>

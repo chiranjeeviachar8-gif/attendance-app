@@ -24,6 +24,14 @@
 <body>
 
 {% if session.get('teacher') %}
+<div class="bg-primary text-white py-2 px-3 d-flex align-items-center justify-content-center position-relative">
+    <img src="{{ url_for('static', filename='college-logo.png') }}" alt="College Emblem"
+         class="position-absolute start-0 ms-3" style="height: 50px; width: 50px;">
+    <div class="text-center">
+        <h5 class="mb-0">DRR GOVT POLYTECHNIC DVG</h5>
+        <small>3rd SEM &mdash; Student Attendance System</small>
+    </div>
+</div>
 <nav class="navbar navbar-expand-lg navbar-dark bg-dark px-3">
     <a class="navbar-brand" href="{{ url_for('dashboard') }}">📋 Attendance System</a>
 
@@ -42,6 +50,7 @@
             <li class="nav-item"><a class="nav-link" href="{{ url_for('mark_attendance') }}">Mark Attendance</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('view_by_date') }}">By Date</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('view_by_student') }}">By Student</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('holidays') }}">Holidays</a></li>
         </ul>
         <span class="navbar-text text-light">Logged in as {{ session['teacher'] }}</span>
     </div>
