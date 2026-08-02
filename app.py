@@ -29,6 +29,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
+from openpyxl import load_workbook
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key")
@@ -78,7 +79,9 @@ def init_db():
                     owner TEXT NOT NULL,
                     roll_no TEXT NOT NULL,
                     name TEXT NOT NULL,
+                    register_no TEXT,
                     class_name TEXT,
+                    batch_name TEXT,
                     UNIQUE(owner, roll_no)
                 )
             """))
@@ -107,31 +110,33 @@ def init_db():
         print(f"[DB] FAILED TO CONNECT: {e}", flush=True)
         raise
 
-    # --- Migration: add 'owner' column if this DB was created before this upgrade ---
+    # --- Migration: add any columns that older deployments of this DB might be missing ---
     # Runs in its OWN transaction so it can never break the main table setup above.
-    try:
-        with engine.begin() as conn:
-            if IS_POSTGRES:
-                exists = conn.execute(text("""
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'students' AND column_name = 'owner'
-                """)).first()
-            elif IS_MYSQL:
-                exists = conn.execute(text("""
-                    SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'students' AND column_name = 'owner' AND table_schema = DATABASE()
-                """)).first()
-            else:
-                cols = conn.execute(text("PRAGMA table_info(students)")).fetchall()
-                exists = any(c[1] == "owner" for c in cols)
+    def _column_exists(conn, table, column):
+        if IS_POSTGRES:
+            return conn.execute(text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = :t AND column_name = :c
+            """), {"t": table, "c": column}).first() is not None
+        elif IS_MYSQL:
+            return conn.execute(text("""
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = :t AND column_name = :c AND table_schema = DATABASE()
+            """), {"t": table, "c": column}).first() is not None
+        else:
+            cols = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            return any(c[1] == column for c in cols)
 
-            if not exists:
-                conn.execute(text("ALTER TABLE students ADD COLUMN owner TEXT"))
-                print("[DB] Migrated: added 'owner' column to students table.", flush=True)
-            else:
-                print("[DB] 'owner' column already present -- no migration needed.", flush=True)
-    except Exception as e:
-        print(f"[DB] Migration check failed (non-fatal): {e}", flush=True)
+    for column in ["owner", "register_no", "batch_name"]:
+        try:
+            with engine.begin() as conn:
+                if not _column_exists(conn, "students", column):
+                    conn.execute(text(f"ALTER TABLE students ADD COLUMN {column} TEXT"))
+                    print(f"[DB] Migrated: added '{column}' column to students table.", flush=True)
+                else:
+                    print(f"[DB] '{column}' column already present -- no migration needed.", flush=True)
+        except Exception as e:
+            print(f"[DB] Migration check for '{column}' failed (non-fatal): {e}", flush=True)
 
 
 def query(sql, params=None, fetch="all"):
@@ -255,11 +260,14 @@ def students():
     if request.method == "POST":
         roll_no = request.form["roll_no"].strip()
         name = request.form["name"].strip()
+        register_no = request.form.get("register_no", "").strip()
         class_name = request.form["class_name"].strip()
+        batch_name = request.form.get("batch_name", "").strip()
         try:
             query(
-                "INSERT INTO students (owner, roll_no, name, class_name) VALUES (:o, :r, :n, :c)",
-                {"o": owner, "r": roll_no, "n": name, "c": class_name},
+                """INSERT INTO students (owner, roll_no, name, register_no, class_name, batch_name)
+                   VALUES (:o, :r, :n, :reg, :c, :b)""",
+                {"o": owner, "r": roll_no, "n": name, "reg": register_no, "c": class_name, "b": batch_name},
                 fetch=None,
             )
             flash(f"Student '{name}' added.", "success")
@@ -271,6 +279,87 @@ def students():
         {"o": owner},
     )
     return render_template("students.html", students=all_students)
+
+
+@app.route("/students/import", methods=["POST"])
+@login_required
+def import_students():
+    owner = current_owner()
+    file = request.files.get("excel_file")
+
+    if not file or file.filename == "":
+        flash("Please choose an Excel file to upload.", "danger")
+        return redirect(url_for("students"))
+
+    if not file.filename.lower().endswith((".xlsx", ".xlsm")):
+        flash("Only .xlsx or .xlsm Excel files are supported.", "danger")
+        return redirect(url_for("students"))
+
+    try:
+        wb = load_workbook(file, read_only=True, data_only=True)
+        ws = wb.active
+    except Exception as e:
+        flash(f"Could not read that Excel file: {e}", "danger")
+        return redirect(url_for("students"))
+
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        flash("That Excel file appears to be empty.", "danger")
+        return redirect(url_for("students"))
+
+    # First row = headers. Match "Roll No", "Name", "Class" (case-insensitive, flexible spacing).
+    headers = [str(h).strip().lower() if h else "" for h in rows[0]]
+
+    def find_col(*names):
+        for i, h in enumerate(headers):
+            if h in names:
+                return i
+        return None
+
+    roll_col = find_col("roll no", "roll_no", "rollno", "roll")
+    name_col = find_col("name", "student name")
+    register_col = find_col("register no", "register_no", "registerno", "reg no", "reg_no")
+    class_col = find_col("class", "class_name", "class name")
+    batch_col = find_col("batch", "batch_name", "batch name")
+
+    if roll_col is None or name_col is None:
+        flash('Excel must have column headers "Roll No" and "Name" in the first row '
+              '("Register No", "Class", "Batch" are optional).', "danger")
+        return redirect(url_for("students"))
+
+    def cell_value(row, col):
+        if col is not None and col < len(row) and row[col] is not None:
+            return str(row[col]).strip()
+        return ""
+
+    added, skipped = 0, 0
+    for row in rows[1:]:
+        if row is None or all(cell in (None, "") for cell in row):
+            continue
+        roll_no = cell_value(row, roll_col)
+        name = cell_value(row, name_col)
+        register_no = cell_value(row, register_col)
+        class_name = cell_value(row, class_col)
+        batch_name = cell_value(row, batch_col)
+
+        if not roll_no or not name:
+            skipped += 1
+            continue
+
+        try:
+            query(
+                """INSERT INTO students (owner, roll_no, name, register_no, class_name, batch_name)
+                   VALUES (:o, :r, :n, :reg, :c, :b)""",
+                {"o": owner, "r": roll_no, "n": name, "reg": register_no, "c": class_name, "b": batch_name},
+                fetch=None,
+            )
+            added += 1
+        except IntegrityError:
+            skipped += 1
+
+    flash(f"Import complete: {added} student(s) added, {skipped} skipped "
+          f"(duplicates or missing data).", "success" if added else "warning")
+    return redirect(url_for("students"))
 
 
 @app.route("/students/delete/<int:student_id>", methods=["POST"])
@@ -303,11 +392,15 @@ def edit_student(student_id):
     if request.method == "POST":
         roll_no = request.form["roll_no"].strip()
         name = request.form["name"].strip()
+        register_no = request.form.get("register_no", "").strip()
         class_name = request.form["class_name"].strip()
+        batch_name = request.form.get("batch_name", "").strip()
         try:
             query(
-                "UPDATE students SET roll_no = :r, name = :n, class_name = :c WHERE id = :id AND owner = :o",
-                {"r": roll_no, "n": name, "c": class_name, "id": student_id, "o": owner},
+                """UPDATE students SET roll_no = :r, name = :n, register_no = :reg,
+                   class_name = :c, batch_name = :b WHERE id = :id AND owner = :o""",
+                {"r": roll_no, "n": name, "reg": register_no, "c": class_name, "b": batch_name,
+                 "id": student_id, "o": owner},
                 fetch=None,
             )
             flash(f"Student '{name}' updated.", "success")
@@ -444,7 +537,7 @@ def view_by_student():
 def export_csv():
     owner = current_owner()
     rows = query("""
-        SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
+        SELECT s.roll_no, s.name, s.register_no, s.class_name, s.batch_name, a.date, a.status, a.marked_by
         FROM attendance a
         JOIN students s ON s.id = a.student_id
         WHERE s.owner = :o
@@ -453,10 +546,10 @@ def export_csv():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Roll No", "Name", "Class", "Date", "Status", "Marked By"])
+    writer.writerow(["Roll No", "Name", "Register No", "Class", "Batch", "Date", "Status", "Marked By"])
     for r in rows:
-        writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
-                          r["date"], r["status"], r["marked_by"] or ""])
+        writer.writerow([r["roll_no"], r["name"], r["register_no"] or "", r["class_name"] or "",
+                          r["batch_name"] or "", r["date"], r["status"], r["marked_by"] or ""])
 
     filename = f"attendance_{owner}_{date.today()}.csv"
     return Response(
@@ -473,7 +566,7 @@ def export_csv_by_date():
     selected_date = request.args.get("att_date") or str(date.today())
 
     rows = query("""
-        SELECT s.roll_no, s.name, s.class_name, a.date, a.status, a.marked_by
+        SELECT s.roll_no, s.name, s.register_no, s.class_name, s.batch_name, a.date, a.status, a.marked_by
         FROM attendance a
         JOIN students s ON s.id = a.student_id
         WHERE a.date = :d AND s.owner = :o
@@ -482,10 +575,10 @@ def export_csv_by_date():
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Roll No", "Name", "Class", "Date", "Status", "Marked By"])
+    writer.writerow(["Roll No", "Name", "Register No", "Class", "Batch", "Date", "Status", "Marked By"])
     for r in rows:
-        writer.writerow([r["roll_no"], r["name"], r["class_name"] or "",
-                          r["date"], r["status"], r["marked_by"] or ""])
+        writer.writerow([r["roll_no"], r["name"], r["register_no"] or "", r["class_name"] or "",
+                          r["batch_name"] or "", r["date"], r["status"], r["marked_by"] or ""])
 
     filename = f"attendance_{owner}_{selected_date}.csv"
     return Response(
