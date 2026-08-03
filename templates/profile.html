@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}My Profile{% endblock %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-md-5">
+        <div class="card p-4 text-center">
+            {% if nav_profile_photo %}
+                <img src="data:image/jpeg;base64,{{ nav_profile_photo }}" alt="Profile photo"
+                     class="rounded-circle mx-auto mb-3" style="width:120px; height:120px; object-fit:cover;">
+            {% else %}
+                <div class="rounded-circle bg-secondary text-white mx-auto mb-3 d-flex align-items-center justify-content-center"
+                     style="width:120px; height:120px; font-size:2.5rem;">👤</div>
+            {% endif %}
+            <h4 class="mb-0">{{ teacher }}</h4>
+            <p class="text-muted small">Teacher Account</p>
+
+            <hr>
+            <h6 class="text-start">Update Profile Photo</h6>
+            <form method="POST" action="{{ url_for('upload_profile_photo') }}" enctype="multipart/form-data">
+                <div class="mb-2">
+                    <input type="file" name="photo" accept="image/*" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm w-100">Upload Photo</button>
+            </form>
+
+            <hr>
+            <h6 class="text-start">Background Image</h6>
+            <form method="POST" action="{{ url_for('upload_background_photo') }}" enctype="multipart/form-data" class="mb-2">
+                <div class="mb-2">
+                    <input type="file" name="background" accept="image/*" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-outline-primary btn-sm w-100">Set Background</button>
+            </form>
+            {% if nav_background_photo %}
+            <form method="POST" action="{{ url_for('remove_background_photo') }}"
+                  onsubmit="return confirm('Remove your custom background image?');">
+                <button type="submit" class="btn btn-outline-danger btn-sm w-100">Remove Background</button>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="card p-4">
+            <h4 class="mb-3">Attendance Summary</h4>
+            <div class="row text-center g-3">
+                <div class="col-6 col-md-3">
+                    <div class="border rounded p-3">
+                        <h5 class="mb-0">{{ student_count }}</h5>
+                        <small class="text-muted">Students</small>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="border rounded p-3">
+                        <h5 class="mb-0">{{ days_marked }}</h5>
+                        <small class="text-muted">Days Marked</small>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="border rounded p-3">
+                        <h5 class="mb-0 text-success">{{ total_present }}</h5>
+                        <small class="text-muted">Total Present</small>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="border rounded p-3">
+                        <h5 class="mb-0 text-danger">{{ total_absent }}</h5>
+                        <small class="text-muted">Total Absent</small>
+                    </div>
+                </div>
+            </div>
+
+            <a href="{{ url_for('attendance_history') }}" class="btn btn-primary w-100 mt-4">
+                📅 View Full Attendance History
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

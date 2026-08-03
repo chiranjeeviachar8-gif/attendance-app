@@ -23,13 +23,15 @@ import os
 import sys
 import csv
 import io
-from datetime import date, timedelta
+import base64
+from datetime import date, timedelta, datetime
 
 from flask import Flask, render_template, request, redirect, url_for, session, flash, Response
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from openpyxl import load_workbook
+from PIL import Image
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-this-secret-key")
@@ -138,6 +140,18 @@ def init_db():
         except Exception as e:
             print(f"[DB] Migration check for '{column}' failed (non-fatal): {e}", flush=True)
 
+    for column in ["profile_photo", "background_photo"]:
+        try:
+            with engine.begin() as conn:
+                if not _column_exists(conn, "teachers", column):
+                    col_type = "LONGTEXT" if IS_MYSQL else "TEXT"
+                    conn.execute(text(f"ALTER TABLE teachers ADD COLUMN {column} {col_type}"))
+                    print(f"[DB] Migrated: added '{column}' column to teachers table.", flush=True)
+                else:
+                    print(f"[DB] '{column}' column already present -- no migration needed.", flush=True)
+        except Exception as e:
+            print(f"[DB] Migration check for '{column}' failed (non-fatal): {e}", flush=True)
+
 
 def query(sql, params=None, fetch="all"):
     """Run a SQL statement. fetch: 'all' | 'one' | None (for writes)."""
@@ -165,6 +179,33 @@ def login_required(func):
 def current_owner():
     """The logged-in teacher's username -- used to scope all their data."""
     return session["teacher"]
+
+
+def resize_image_to_base64(file_storage, max_size, quality=80):
+    """Resize an uploaded image and return it as a base64 JPEG string."""
+    img = Image.open(file_storage)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail(max_size, Image.LANCZOS)
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG", quality=quality, optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+@app.context_processor
+def inject_teacher_theme():
+    """Makes the logged-in teacher's profile photo / background available on every page."""
+    if "teacher" in session:
+        t = query(
+            "SELECT profile_photo, background_photo FROM teachers WHERE username = :u",
+            {"u": session["teacher"]}, fetch="one"
+        )
+        if t:
+            return {
+                "nav_profile_photo": t["profile_photo"],
+                "nav_background_photo": t["background_photo"],
+            }
+    return {"nav_profile_photo": None, "nav_background_photo": None}
 
 
 # ---------------------------------------------------------------------
@@ -625,6 +666,127 @@ def delete_holiday(holiday_id):
     )
     flash("Holiday removed.", "info")
     return redirect(url_for("holidays"))
+
+
+# ---------------------------------------------------------------------
+# Profile (photo, background image, quick stats)
+# ---------------------------------------------------------------------
+@app.route("/profile")
+@login_required
+def profile():
+    owner = current_owner()
+    student_count = query(
+        "SELECT COUNT(*) AS c FROM students WHERE owner = :o", {"o": owner}, fetch="one"
+    )["c"]
+    days_marked = query("""
+        SELECT COUNT(DISTINCT a.date) AS c FROM attendance a
+        JOIN students s ON s.id = a.student_id WHERE s.owner = :o
+    """, {"o": owner}, fetch="one")["c"]
+    total_present = query("""
+        SELECT COUNT(*) AS c FROM attendance a
+        JOIN students s ON s.id = a.student_id WHERE s.owner = :o AND a.status = 'Present'
+    """, {"o": owner}, fetch="one")["c"]
+    total_absent = query("""
+        SELECT COUNT(*) AS c FROM attendance a
+        JOIN students s ON s.id = a.student_id WHERE s.owner = :o AND a.status = 'Absent'
+    """, {"o": owner}, fetch="one")["c"]
+
+    return render_template(
+        "profile.html",
+        teacher=owner,
+        student_count=student_count,
+        days_marked=days_marked,
+        total_present=total_present,
+        total_absent=total_absent,
+    )
+
+
+@app.route("/profile/photo", methods=["POST"])
+@login_required
+def upload_profile_photo():
+    owner = current_owner()
+    file = request.files.get("photo")
+    if not file or file.filename == "":
+        flash("Please choose an image file.", "danger")
+        return redirect(url_for("profile"))
+    try:
+        photo_b64 = resize_image_to_base64(file, max_size=(300, 300), quality=80)
+        query(
+            "UPDATE teachers SET profile_photo = :p WHERE username = :u",
+            {"p": photo_b64, "u": owner}, fetch=None,
+        )
+        flash("Profile photo updated.", "success")
+    except Exception as e:
+        flash(f"Could not process that image: {e}", "danger")
+    return redirect(url_for("profile"))
+
+
+@app.route("/profile/background", methods=["POST"])
+@login_required
+def upload_background_photo():
+    owner = current_owner()
+    file = request.files.get("background")
+    if not file or file.filename == "":
+        flash("Please choose an image file.", "danger")
+        return redirect(url_for("profile"))
+    try:
+        bg_b64 = resize_image_to_base64(file, max_size=(1600, 1600), quality=70)
+        query(
+            "UPDATE teachers SET background_photo = :p WHERE username = :u",
+            {"p": bg_b64, "u": owner}, fetch=None,
+        )
+        flash("Background image updated.", "success")
+    except Exception as e:
+        flash(f"Could not process that image: {e}", "danger")
+    return redirect(url_for("profile"))
+
+
+@app.route("/profile/background/remove", methods=["POST"])
+@login_required
+def remove_background_photo():
+    owner = current_owner()
+    query(
+        "UPDATE teachers SET background_photo = NULL WHERE username = :u",
+        {"u": owner}, fetch=None,
+    )
+    flash("Background image removed.", "info")
+    return redirect(url_for("profile"))
+
+
+# ---------------------------------------------------------------------
+# Attendance History (all dates, with day-of-week, drill down by date)
+# ---------------------------------------------------------------------
+@app.route("/attendance/history")
+@login_required
+def attendance_history():
+    owner = current_owner()
+    rows = query("""
+        SELECT a.date AS att_date,
+               SUM(CASE WHEN a.status = 'Present' THEN 1 ELSE 0 END) AS present_count,
+               SUM(CASE WHEN a.status = 'Absent' THEN 1 ELSE 0 END) AS absent_count,
+               COUNT(*) AS total
+        FROM attendance a
+        JOIN students s ON s.id = a.student_id
+        WHERE s.owner = :o
+        GROUP BY a.date
+        ORDER BY a.date DESC
+    """, {"o": owner})
+
+    history = []
+    for r in rows:
+        try:
+            day_name = datetime.strptime(r["att_date"], "%Y-%m-%d").strftime("%A")
+        except ValueError:
+            day_name = ""
+        history.append({
+            "date": r["att_date"],
+            "day_name": day_name,
+            "present": r["present_count"],
+            "absent": r["absent_count"],
+            "total": r["total"],
+        })
+
+    return render_template("attendance_history.html", history=history)
 
 
 # ---------------------------------------------------------------------

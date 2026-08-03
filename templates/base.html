@@ -21,7 +21,7 @@
         .card { border: none; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
     </style>
 </head>
-<body>
+<body {% if nav_background_photo %}style="background-image: url('data:image/jpeg;base64,{{ nav_background_photo }}'); background-size: cover; background-position: center; background-attachment: fixed;"{% endif %}>
 
 {% if session.get('teacher') %}
 <div class="bg-primary text-white py-2 px-3 d-flex align-items-center justify-content-center position-relative">
@@ -36,6 +36,14 @@
     <a class="navbar-brand" href="{{ url_for('dashboard') }}">📋 Attendance System</a>
 
     <div class="d-flex order-lg-3 align-items-center">
+        <a href="{{ url_for('profile') }}" class="me-2" title="My Profile">
+            {% if nav_profile_photo %}
+                <img src="data:image/jpeg;base64,{{ nav_profile_photo }}" alt="Profile"
+                     class="rounded-circle" style="width:32px; height:32px; object-fit:cover; border:2px solid #fff;">
+            {% else %}
+                <span style="font-size:1.6rem;">👤</span>
+            {% endif %}
+        </a>
         <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
         <button class="navbar-toggler ms-2" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
                 aria-controls="navMenu" aria-expanded="false" aria-label="Toggle navigation">
@@ -50,6 +58,7 @@
             <li class="nav-item"><a class="nav-link" href="{{ url_for('mark_attendance') }}">Mark Attendance</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('view_by_date') }}">By Date</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('view_by_student') }}">By Student</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('attendance_history') }}">3rd SEM CS Attendance</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('holidays') }}">Holidays</a></li>
         </ul>
         <span class="navbar-text text-light">Logged in as {{ session['teacher'] }}</span>
