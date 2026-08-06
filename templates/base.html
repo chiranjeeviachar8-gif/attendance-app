@@ -44,11 +44,11 @@
                 <span style="font-size:1.6rem;">👤</span>
             {% endif %}
         </a>
-        <a class="btn btn-outline-light btn-sm" href="{{ url_for('logout') }}">Logout</a>
-        <button class="navbar-toggler ms-2" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
+        <button class="navbar-toggler me-2" type="button" data-bs-toggle="collapse" data-bs-target="#navMenu"
                 aria-controls="navMenu" aria-expanded="false" aria-label="Toggle navigation">
             <span class="navbar-toggler-icon"></span>
         </button>
+        <a class="btn btn-outline-light btn-sm ms-auto" href="{{ url_for('logout') }}">Logout</a>
     </div>
 
     <div class="collapse navbar-collapse order-lg-2" id="navMenu">
